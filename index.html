@@ -941,6 +941,7 @@ const POWERUP_TYPES = {
   permBullet: { name: '弹道+1', icon: '⭐', color: '#f1c40f', duration: 0 },
   permSpeed:  { name: '移速+1', icon: '💨', color: '#2ecc71', duration: 0 },
   permRapid:  { name: '射速+1', icon: '⚡', color: '#e74c3c', duration: 0 },
+  heal:      { name: '回血', icon: '❤️', color: '#e74c3c', duration: 0 },
 };
 
 class PowerUp {
@@ -1037,6 +1038,13 @@ class Player {
     if (type === 'permRapid') {
       this.permRapidLevel++;
       addScorePopup(this.x, this.y - 40, '射速永久+1!');
+      return;
+    }
+    if (type === 'heal') {
+      if (this.hp < this.maxHp) {
+        this.hp++;
+        addScorePopup(this.x, this.y - 40, '❤️ +1生命!');
+      }
       return;
     }
     const dur = POWERUP_TYPES[type].duration;
@@ -1380,6 +1388,8 @@ function killEnemy(enemy, i) {
     const permDrops = ['permBullet', 'permSpeed', 'permRapid'];
     const dropType = permDrops[enemy.eliteTier % 3];
     powerUps.push(new PowerUp(enemy.x, enemy.y, dropType));
+    // Boss额外掉落回血道具
+    powerUps.push(new PowerUp(enemy.x + rand(-20, 20), enemy.y - 10, 'heal'));
     // 击杀精英触发难度递增
     eliteKills++;
   } else {
