@@ -558,6 +558,20 @@ const ENEMY_TYPES = {
     width: 56,
     height: 60,
   },
+  elite: {
+    name: '精英战机',
+    hp: 15,
+    speed: 0.6,
+    score: 200,
+    shootInterval: 45,
+    bulletSpeed: 3.5,
+    bulletSize: 9,
+    bulletColor: '#f1c40f',
+    bodyColor: '#1a1a2e',
+    wingColor: '#f39c12',
+    width: 64,
+    height: 68,
+  },
 };
 
 // ========== 敌人类 ==========
@@ -577,24 +591,70 @@ class Enemy {
     this.wobbleAmp = rand(0.5, 1.5);
     this.wobbleFreq = rand(0.02, 0.05);
     this.wobbleOffset = rand(0, Math.PI * 2);
-    this.entered = false; // 是否已完全进入屏幕
+    this.entered = false;
+    // 新：阶段系统
+    this.targetY = rand(150, 380);     // 停止下降的目标Y
+    this.phase = 'descending';          // 'descending' | 'strafing' | 'retreating'
+    this.centerX = this.x;
+    this.strafeDir = (Math.random() < 0.5 ? -1 : 1);
+    this.strafeSpeed = rand(1.2, 2.5);
+    this.strafeRange = rand(80, 160);
+    this.lifetime = 0;                  // 停留在屏幕上的帧数
+    this.maxLifetime = randInt(600, 900); // 10-15秒后撤退
   }
 
   update() {
-    this.y += this.speed;
-    this.x += Math.sin(frameCount * this.wobbleFreq + this.wobbleOffset) * this.wobbleAmp;
+    this.lifetime++;
+
+    if (this.phase === 'descending') {
+      // 下降阶段
+      this.y += this.speed;
+      this.x += Math.sin(frameCount * this.wobbleFreq + this.wobbleOffset) * this.wobbleAmp;
+      if (this.y > 30) this.entered = true;
+      // 到达目标Y，切换为平移
+      if (this.y >= this.targetY) {
+        this.phase = 'strafing';
+        this.centerX = this.x;
+      }
+    } else if (this.phase === 'strafing') {
+      // 左右平移阶段
+      this.x += this.strafeSpeed * this.strafeDir;
+      // 碰到边界反弹
+      if (this.x < this.width / 2 + 10) {
+        this.x = this.width / 2 + 10;
+        this.strafeDir = 1;
+      } else if (this.x > GAME_W - this.width / 2 - 10) {
+        this.x = GAME_W - this.width / 2 - 10;
+        this.strafeDir = -1;
+      }
+      // 随机改变方向
+      if (Math.random() < 0.005) {
+        this.strafeDir *= -1;
+      }
+      // 微小的Y轴浮动
+      this.y += Math.sin(frameCount * 0.03 + this.wobbleOffset) * 0.4;
+      // 超时撤退
+      if (this.lifetime > this.maxLifetime) {
+        this.phase = 'retreating';
+      }
+    } else if (this.phase === 'retreating') {
+      // 撤退阶段：向上飞出屏幕
+      this.y -= this.speed * 1.5;
+      this.x += Math.sin(frameCount * 0.08 + this.wobbleOffset) * 1.5;
+    }
 
     // 限制在屏幕内
-    if (this.y > 30) this.entered = true;
     this.x = Math.max(this.width / 2, Math.min(GAME_W - this.width / 2, this.x));
 
-    // 射击
+    // 射击（下降和平移阶段都可射击）
     this.shootTimer--;
-    if (this.shootTimer <= 0 && this.entered && this.y < GAME_H - 150) {
+    if (this.shootTimer <= 0 && this.entered && this.y < GAME_H - 120 && this.phase !== 'retreating') {
       this.shootTimer = this.cfg.shootInterval + randInt(-20, 20);
-      if (this.type === 'bomber') {
-        // 轰炸机发射扇形弹幕
-        for (let a = -0.3; a <= 0.3; a += 0.15) {
+      if (this.type === 'bomber' || this.type === 'elite') {
+        // 轰炸机/精英发射扇形弹幕
+        const spread = this.type === 'elite' ? 5 : 3;
+        const step = this.type === 'elite' ? 0.12 : 0.15;
+        for (let a = -spread * step; a <= spread * step; a += step) {
           enemyBullets.push(new Bullet(
             this.x + a * 20, this.y + this.height / 2,
             a * 1.5, this.cfg.bulletSpeed,
@@ -617,15 +677,23 @@ class Enemy {
     ctx.translate(this.x, this.y);
     // 轻微抖动
     const jitter = Math.sin(frameCount * 0.1 + this.wobbleOffset) * 0.8;
+    const isElite = this.type === 'elite';
+
+    // 精英光晕
+    if (isElite) {
+      ctx.shadowColor = '#f1c40f';
+      ctx.shadowBlur = 15 + Math.sin(frameCount * 0.15) * 5;
+    }
 
     // 机身
     ctx.fillStyle = this.cfg.bodyColor;
     ctx.beginPath();
     ctx.ellipse(0, jitter, this.width * 0.35, this.height * 0.45, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = '#2c1810';
-    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = isElite ? '#f1c40f' : '#2c1810';
+    ctx.lineWidth = isElite ? 2.5 : 1.5;
     ctx.stroke();
+    ctx.shadowBlur = 0;
 
     // 机翼
     ctx.fillStyle = this.cfg.wingColor;
@@ -659,17 +727,91 @@ class Enemy {
 
     // 血量指示器（多血敌人）
     if (this.maxHp > 1) {
+      const barW = Math.min(6, (this.width * 0.6) / this.maxHp);
+      const startX = -(this.maxHp * barW + (this.maxHp - 1) * 1) / 2;
       for (let i = 0; i < this.maxHp; i++) {
         ctx.fillStyle = i < this.hp ? '#2ecc71' : '#555';
-        ctx.fillRect(-this.width * 0.3 + i * 8, -this.height * 0.55, 6, 4);
+        ctx.fillRect(startX + i * (barW + 1), -this.height * 0.55, barW, 4);
       }
+    }
+
+    // 精英标签
+    if (isElite) {
+      ctx.fillStyle = '#f1c40f';
+      ctx.font = 'bold 11px "Segoe UI", "PingFang SC", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('⭐精英⭐', 0, -this.height * 0.65);
+      ctx.textAlign = 'start';
     }
 
     ctx.restore();
   }
 
   get offScreen() {
-    return this.y > GAME_H + 100;
+    return (this.phase === 'retreating' && this.y < -100) || this.y > GAME_H + 100;
+  }
+}
+
+// ========== 道具类 ==========
+const POWERUP_TYPES = {
+  speed:   { name: '加速', icon: '⚡', color: '#2ecc71', duration: 480 },
+  spread:  { name: '散射', icon: '💠', color: '#3498db', duration: 420 },
+  rapid:   { name: '速射', icon: '🔥', color: '#e74c3c', duration: 390 },
+  permBullet: { name: '弹道+1', icon: '⭐', color: '#f1c40f', duration: 0 },
+};
+
+class PowerUp {
+  constructor(x, y, type) {
+    this.x = x;
+    this.y = y;
+    this.type = type;
+    this.cfg = POWERUP_TYPES[type];
+    this.width = 28;
+    this.height = 28;
+    this.vy = 1.2;
+    this.life = 420; // 7秒后消失
+    this.bobOffset = rand(0, Math.PI * 2);
+  }
+
+  update() {
+    this.y += this.vy;
+    this.life--;
+    this.bobOffset += 0.06;
+  }
+
+  draw() {
+    const alpha = this.life < 60 ? this.life / 60 : 1;
+    const bob = Math.sin(this.bobOffset) * 4;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(this.x, this.y + bob);
+
+    // 纸板风格道具框
+    ctx.fillStyle = 'rgba(200,168,124,0.9)';
+    ctx.strokeStyle = this.cfg.color;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    roundRect(-this.width / 2, -this.height / 2, this.width, this.height, 8);
+    ctx.fill();
+    ctx.stroke();
+
+    // 光晕
+    ctx.shadowColor = this.cfg.color;
+    ctx.shadowBlur = 10 + Math.sin(this.bobOffset * 2) * 4;
+
+    // 图标文字
+    ctx.font = '16px "Segoe UI", "PingFang SC", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = this.cfg.color;
+    ctx.fillText(this.cfg.icon, 0, 0);
+
+    ctx.shadowBlur = 0;
+    ctx.restore();
+  }
+
+  get offScreen() {
+    return this.y > GAME_H + 40 || this.life <= 0;
   }
 }
 
@@ -680,18 +822,54 @@ class Player {
     this.height = 52;
     this.x = GAME_W / 2;
     this.y = GAME_H - 120;
+    this.baseSpeed = 6;
     this.speed = 6;
     this.hp = 3;
     this.maxHp = 3;
-    this.invincible = 0; // 无敌帧
-    this.tilt = 0;       // 当前倾斜角度
-    this.targetTilt = 0; // 目标倾斜角度
+    this.invincible = 0;
+    this.tilt = 0;
+    this.targetTilt = 0;
     this.shootTimer = 0;
-    this.shootInterval = 14; // 每14帧发射一次
+    this.baseShootInterval = 14;
+    this.shootInterval = 14;
     this.engineFlame = 0;
+    // 增益系统
+    this.bulletCount = 2;           // 基础弹道数（永久增益可增加）
+    this.tempBuffs = {};            // {speed: frames_remaining, spread: frames, rapid: frames}
   }
 
+  addBuff(type) {
+    if (type === 'permBullet') {
+      this.bulletCount++;
+      addScorePopup(this.x, this.y - 40, '弹道+1!');
+      return;
+    }
+    const dur = POWERUP_TYPES[type].duration;
+    this.tempBuffs[type] = (this.tempBuffs[type] || 0) + dur;
+    // 最多叠加到dur*1.5
+    if (this.tempBuffs[type] > dur * 1.5) this.tempBuffs[type] = dur * 1.5;
+    addScorePopup(this.x, this.y - 40, POWERUP_TYPES[type].name + '!');
+  }
+
+  get activeBuffs() {
+    return Object.keys(this.tempBuffs).filter(k => this.tempBuffs[k] > 0);
+  }
+
+  get hasSpread() { return (this.tempBuffs['spread'] || 0) > 0; }
+  get hasRapid() { return (this.tempBuffs['rapid'] || 0) > 0; }
+
   update(keys) {
+    // 更新临时增益计时
+    for (const k in this.tempBuffs) {
+      if (this.tempBuffs[k] > 0) this.tempBuffs[k]--;
+    }
+
+    // 速度计算
+    this.speed = this.baseSpeed * (this.tempBuffs['speed'] > 0 ? 1.5 : 1);
+    this.shootInterval = Math.max(5, Math.floor(
+      this.baseShootInterval * (this.hasRapid ? 0.55 : 1)
+    ));
+
     // 移动
     this.targetTilt = 0;
     if (keys.left && this.x > this.width / 2) {
@@ -713,14 +891,31 @@ class Player {
     this.shootTimer--;
     if (this.shootTimer <= 0) {
       this.shootTimer = this.shootInterval;
-      playerBullets.push(new Bullet(
-        this.x - 8, this.y - this.height / 2,
-        0, -11, 4.5, '#3e2723', false
-      ));
-      playerBullets.push(new Bullet(
-        this.x + 8, this.y - this.height / 2,
-        0, -11, 4.5, '#3e2723', false
-      ));
+      const bulletCount = this.bulletCount;
+      if (this.hasSpread) {
+        // 散射模式
+        const total = bulletCount + 2;
+        const spreadAngle = 0.45;
+        for (let i = 0; i < total; i++) {
+          const a = (i / (total - 1) - 0.5) * spreadAngle;
+          playerBullets.push(new Bullet(
+            this.x, this.y - this.height / 2,
+            Math.sin(a) * 8, -11 * Math.cos(a),
+            3.5, '#3e2723', false
+          ));
+        }
+      } else {
+        // 普通模式
+        const spacing = bulletCount > 2 ? 7 : 8;
+        const totalWidth = (bulletCount - 1) * spacing;
+        for (let i = 0; i < bulletCount; i++) {
+          const bx = this.x - totalWidth / 2 + i * spacing;
+          playerBullets.push(new Bullet(
+            bx, this.y - this.height / 2,
+            0, -11, 4.5, '#3e2723', false
+          ));
+        }
+      }
       sfxPlayerShoot();
     }
 
@@ -850,6 +1045,7 @@ let enemyBullets = [];
 let particles = [];
 let stars = [];
 let scorePopups = [];
+let powerUps = [];           // 道具掉落
 
 // 输入
 const keys = { left: false, right: false };
@@ -859,10 +1055,12 @@ let frameCount = 0;
 let screenShake = 0;
 let score = 0;
 let enemySpawnTimer = 0;
-let enemySpawnInterval = 140; // 初始2.3秒
+let enemySpawnInterval = 140;
 let difficultyTimer = 0;
 let comboCount = 0;
 let comboTimer = 0;
+let eliteMilestones = [1000, 3000, 6000, 10000, 15000, 21000]; // 精英出现分数节点
+let nextEliteIdx = 0;
 
 // UI 元素
 const startScreen = document.getElementById('start-screen');
@@ -880,6 +1078,7 @@ function initGame() {
   enemyBullets = [];
   particles = [];
   scorePopups = [];
+  powerUps = [];
   score = 0;
   frameCount = 0;
   screenShake = 0;
@@ -888,6 +1087,7 @@ function initGame() {
   difficultyTimer = 0;
   comboCount = 0;
   comboTimer = 0;
+  nextEliteIdx = 0;
 
   // 初始化星星
   stars = [];
@@ -898,10 +1098,18 @@ function initGame() {
 
 // ========== 生成敌人 ==========
 function spawnEnemy() {
+  // 检查是否触发精英
+  if (nextEliteIdx < eliteMilestones.length && score >= eliteMilestones[nextEliteIdx]) {
+    enemies.push(new Enemy('elite'));
+    nextEliteIdx++;
+    // 屏幕提示
+    addScorePopup(GAME_W / 2, GAME_H / 2, '⚠ 精英战机出现! ⚠');
+    return;
+  }
   const roll = Math.random();
   let type;
-  if (roll < 0.55) type = 'scout';
-  else if (roll < 0.85) type = 'fighter';
+  if (roll < 0.50) type = 'scout';
+  else if (roll < 0.82) type = 'fighter';
   else type = 'bomber';
   enemies.push(new Enemy(type));
 }
@@ -933,7 +1141,7 @@ function addScorePopup(x, y, pts) {
 function killEnemy(enemy, i) {
   // 粒子爆炸效果
   const cfg = enemy.cfg;
-  const count = enemy.type === 'bomber' ? 25 : (enemy.type === 'fighter' ? 18 : 12);
+  const count = enemy.type === 'bomber' ? 25 : (enemy.type === 'fighter' ? 18 : (enemy.type === 'elite' ? 35 : 12));
   for (let j = 0; j < count; j++) {
     particles.push(new Particle(enemy.x, enemy.y, cfg.bodyColor));
     if (j % 2 === 0) particles.push(new Particle(enemy.x, enemy.y, cfg.wingColor));
@@ -945,6 +1153,23 @@ function killEnemy(enemy, i) {
   score += pts;
   addScorePopup(enemy.x, enemy.y, pts);
   sfxExplosion(enemy.type);
+
+  // 道具掉落
+  if (enemy.type === 'elite') {
+    // 精英必定掉落永久弹道+1
+    powerUps.push(new PowerUp(enemy.x, enemy.y, 'permBullet'));
+  } else {
+    // 普通敌人 ~18% 概率掉落临时道具
+    if (Math.random() < 0.18) {
+      const roll = Math.random();
+      let dropType;
+      if (roll < 0.35) dropType = 'speed';
+      else if (roll < 0.70) dropType = 'rapid';
+      else dropType = 'spread';
+      powerUps.push(new PowerUp(enemy.x, enemy.y, dropType));
+    }
+  }
+
   // 移除敌人
   enemies.splice(i, 1);
 }
@@ -1012,6 +1237,20 @@ function checkCollisions() {
     }
   }
 
+  // 道具拾取
+  if (gameState === STATE.PLAYING) {
+    for (let p = powerUps.length - 1; p >= 0; p--) {
+      const pu = powerUps[p];
+      const dx = pu.x - player.x;
+      const dy = pu.y - player.y;
+      if (Math.abs(dx) < player.width * 0.6 && Math.abs(dy) < player.height * 0.6) {
+        player.addBuff(pu.type);
+        sfxPlayerShoot(); // 拾取音效复用
+        powerUps.splice(p, 1);
+      }
+    }
+  }
+
   // 敌人机身碰撞玩家
   if (gameState === STATE.PLAYING && player.invincible <= 0) {
     for (let e = enemies.length - 1; e >= 0; e--) {
@@ -1034,6 +1273,7 @@ function cleanup() {
   playerBullets = playerBullets.filter(b => !b.offScreen);
   enemyBullets = enemyBullets.filter(b => !b.offScreen);
   particles = particles.filter(p => !p.dead);
+  powerUps = powerUps.filter(p => !p.offScreen);
 }
 
 // ========== 更新 ==========
@@ -1071,6 +1311,9 @@ function update() {
 
   // 更新粒子
   particles.forEach(p => p.update());
+
+  // 更新道具
+  powerUps.forEach(p => p.update());
 
   // 更新得分弹出
   scorePopups = scorePopups.filter(p => {
@@ -1173,6 +1416,25 @@ function drawHUD() {
     ctx.fillText(`连续击杀 x${comboCount}!`, GAME_W / 2, hudY + 70);
     ctx.textAlign = 'start';
   }
+
+  // 增益状态显示
+  let buffY = hudY + 52;
+  if (player.bulletCount > 2) {
+    ctx.fillStyle = 'rgba(241,196,15,0.85)';
+    ctx.font = 'bold 12px "Segoe UI", "PingFang SC", sans-serif';
+    ctx.fillText(`⭐弹道 x${player.bulletCount}`, hudX + 8, buffY);
+    buffY += 18;
+  }
+  const activeBuffs = player.activeBuffs;
+  for (const buff of activeBuffs) {
+    const remaining = player.tempBuffs[buff];
+    const seconds = Math.ceil(remaining / 60);
+    const cfg = POWERUP_TYPES[buff];
+    ctx.fillStyle = cfg.color;
+    ctx.font = 'bold 12px "Segoe UI", "PingFang SC", sans-serif';
+    ctx.fillText(`${cfg.icon} ${cfg.name} ${seconds}s`, hudX + 8, buffY);
+    buffY += 18;
+  }
 }
 
 function roundRect(x, y, w, h, r) {
@@ -1224,6 +1486,9 @@ function render() {
   if (gameState === STATE.PLAYING || gameState === STATE.GAMEOVER) {
     // 粒子
     particles.forEach(p => p.draw());
+
+    // 道具
+    powerUps.forEach(p => p.draw());
 
     // 敌人
     enemies.forEach(e => e.draw());
